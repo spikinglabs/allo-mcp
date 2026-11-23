@@ -27,22 +27,29 @@ Example: `outings_search` calls `search` on Allo Outings.
 
 ## Usage counts and logs
 
-`src/usage.js`, written in the background (`ctx.waitUntil`) after each answer, so it never
-blocks or slows a call, and any failure is ignored.
+Nothing is written to storage on a call. Instead:
 
-- **Counts** on the shared Allo usage counter (https://monitoring.admin.allo.land/, site
-  "Allo Land connector (MCP gateway)"), per day and country: `session`, `client_<assistant>`
-  (`claude`, `chatgpt`, `cursor`, …, `other`), `tool_<prefix>_<name>`, `error`.
-  Service binding `COUNT` to the `allo-count` Worker (spikinglabs/alloland-rebirth, `workers/count`).
-- **Raw log** in the private R2 bucket `allo-mcp-logs` (binding `LOGS`):
-  `logs/<day>/<HHMMSSmmm>-<random>.ndjson`, one line per JSON-RPC request with `t`, `method`,
-  `tool`, `service`, `client`, `proto`, `ua` (first product token), `country`, `ms`, `ok`, `err`.
-  No IP address, no IDs or cookies, no tool arguments, nothing from the answers.
-  Notifications and pings are not logged.
+- **During the day**, each request becomes one data point in Workers Analytics Engine
+  (`src/usage.js`, dataset `allo_mcp_usage`). `writeDataPoint` returns at once and errors are
+  ignored, so it never blocks, slows or breaks a call. Notifications and pings are skipped.
+- **Once a day** at 01:20 UTC (`src/export.js`, cron), yesterday becomes one file in the private
+  R2 bucket `allo-mcp-logs`, `logs/<YYYY-MM-DD>.ndjson`, and its totals go to the shared Allo usage
+  counter (https://monitoring.admin.allo.land/, "Allo Land connector (MCP gateway)"): `session`,
+  `client_<assistant>`, `tool_<prefix>_<name>`, `error`, per country. Days missed in the last
+  week are caught up; a day already in R2 is never exported twice.
 
-Free-tier budget: one R2 write per logged POST against 1 million writes a month for the whole
-Cloudflare account (shared with the Allo Cars MCP log) and 10 GB of storage. Set
-`USAGE = "off"` in `wrangler.toml` to stop counts and logs.
+A log line has `t`, `method`, `tool`, `service`, `client`, `clientVersion`, `proto`, `ua` (first
+User-Agent token), `country`, `ms`, `ok`, `err`, and `sample` when Analytics Engine sampled.
+Never an IP address, ID, cookie, tool arguments or anything from the answers.
+
+Free-tier budget: Analytics Engine 100,000 data points a day (past that, points are dropped,
+not billed) and 10,000 read queries a day (the export uses 24); R2 one write a day; the counter
+one call a day. Analytics Engine keeps points for 3 months, so the R2 files are the long-term copy.
+
+Setup: the GitHub secret `CLOUDFLARE_ANALYTICS_TOKEN` (an API token with Account → Account
+Analytics → Read on the SpikingLabs account). The deploy workflow stores it, with the account ID,
+as the Worker secrets `AE_API_TOKEN` and `ACCOUNT_ID`. Set `USAGE = "off"` in `wrangler.toml` to
+stop recording and exporting.
 
 ## Add a server
 

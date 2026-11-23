@@ -2,7 +2,7 @@
 // that lists the tools of every Allo MCP server under a prefix and passes each
 // call through to the server that owns the tool.
 
-import { usageEvent, saveUsage } from "./usage.js";
+import { usageEvent, recordUsage } from "./usage.js";
 
 export const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const LATEST = PROTOCOL_VERSIONS[0];
@@ -216,8 +216,8 @@ export function createGateway(upstreams, { fetchImpl = fetch, now = Date.now } =
         return answer;
       })
     );
-    // In the background, after the answer: never blocks or fails a call.
-    saveUsage({ request, env, ctx, events });
+    // Fire-and-forget data points; stored and exported once a day (src/usage.js, src/export.js).
+    recordUsage({ request, env, events });
     const out = answers.filter(Boolean);
     if (!out.length) return new Response(null, { status: 202, headers: CORS });
     return json(Array.isArray(body) ? out : out[0]);

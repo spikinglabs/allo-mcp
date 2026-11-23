@@ -1,22 +1,19 @@
-// Usage of the gateway: daily counts and a raw log, both written in the background
-// (ctx.waitUntil) after the answer has gone out, so they never block or slow a call.
-// Any failure here is swallowed: logging must never break an answer.
+// Usage of the gateway, written once a day, never on the path of a call.
 //
-// 1. Counts, on the shared Allo usage counter (monitoring.admin.allo.land, site "mcp"),
-//    over the COUNT service binding to the allo-count Worker (spikinglabs/alloland-rebirth,
-//    workers/count). Per day and country: "session" when an assistant connects,
-//    "client_<name>" for which assistant, "tool_<prefix>_<name>" per tool call, "error".
+// During the day: each JSON-RPC request becomes one data point in Workers Analytics
+// Engine (binding USAGE_AE, dataset allo_mcp_usage). writeDataPoint returns at once, does
+// no I/O we wait for, and any error is swallowed, so it never blocks, slows or breaks a
+// call. Analytics Engine keeps data points for 3 months; free plan: 100,000 a day.
 //
-// 2. A raw log in the R2 bucket bound as LOGS: one small NDJSON object per POST,
-//    logs/<YYYY-MM-DD>/<HHMMSSmmm>-<random>.ndjson, one line per JSON-RPC message:
-//      t, method, tool, service, client {name, version}, proto, ua (first product token),
-//      country, ms, ok, err
-//    Never: IP address, session or user ID, cookies, tool arguments, or anything from the answer.
+// Once a day (src/export.js, cron): yesterday's points become one NDJSON file in the
+// private R2 bucket allo-mcp-logs (logs/<YYYY-MM-DD>.ndjson), and their totals go to the
+// shared Allo usage counter (monitoring.admin.allo.land, site "mcp").
 //
-// Free-tier budget: one R2 write per POST against 1 million writes a month for the whole account
-// (shared with the Allo Cars MCP log). To stop both counts and logs, set USAGE = "off" in wrangler.toml.
+// A data point holds (and nothing else): method, tool, service, the assistant's name and
+// version, protocol version, first User-Agent token, country, error text, time taken,
+// ok. Never an IP address, ID, cookie, tool arguments or anything from the answer.
 
-const pad = (n, w = 2) => String(n).padStart(w, "0");
+export const DATASET = "allo_mcp_usage";
 
 export function cleanText(value, max = 80) {
   return String(value ?? "")
@@ -47,12 +44,13 @@ export function clientKind(name) {
   return "other";
 }
 
-export function usageEvent({ msg, answer, ms, route, at = new Date() }) {
-  const ev = { t: at.toISOString(), method: typeof msg?.method === "string" ? cleanText(msg.method, 60) : "invalid" };
+export function usageEvent({ msg, answer, ms, route }) {
+  const ev = { method: typeof msg?.method === "string" ? cleanText(msg.method, 60) : "invalid" };
   const params = (msg && typeof msg.params === "object" && msg.params) || {};
   if (ev.method === "initialize") {
     const info = params.clientInfo || {};
-    if (info.name) ev.client = { name: cleanText(info.name, 60), version: info.version ? cleanText(info.version, 30) : undefined };
+    if (info.name) ev.client = cleanText(info.name, 60);
+    if (info.version) ev.clientVersion = cleanText(info.version, 30);
     if (params.protocolVersion) ev.proto = cleanText(params.protocolVersion, 20);
   }
   if (ev.method === "tools/call") {
@@ -73,44 +71,48 @@ export function usageEvent({ msg, answer, ms, route, at = new Date() }) {
   return ev;
 }
 
-export function counterFeatures(ev) {
-  const out = [];
-  if (ev.method === "initialize") out.push("session", `client_${clientKind(ev.client?.name)}`);
-  // Only real tool names become counter rows, so junk names can't fill the table.
-  if (ev.method === "tools/call") out.push(ev.service !== "unknown" && /^[a-z0-9_]{1,43}$/.test(ev.tool || "") ? `tool_${ev.tool}` : "tool_unknown");
-  if (ev.ok === false) out.push("error");
-  return out;
-}
-
-export function logKey(at = new Date(), rand = Math.random) {
-  const day = at.toISOString().slice(0, 10);
-  const time = pad(at.getUTCHours()) + pad(at.getUTCMinutes()) + pad(at.getUTCSeconds()) + pad(at.getUTCMilliseconds(), 3);
-  return `logs/${day}/${time}-${Math.floor(rand() * 36 ** 6).toString(36).padStart(6, "0")}.ndjson`;
-}
+// Column order in Analytics Engine. Never reorder: old points keep their positions.
+export const BLOBS = ["method", "tool", "service", "client", "clientVersion", "proto", "ua", "country", "err"];
+export const DOUBLES = ["ms", "ok"];
 
 const userAgent = (request) => {
   const first = (request.headers.get("user-agent") || "").trim().split(/[\s(]/)[0];
-  return first ? cleanText(first, 60) : undefined;
+  return first ? cleanText(first, 60) : "";
 };
 
-// Starts the writes in the background. Never throws and never awaits on the answer's path.
-export function saveUsage({ request, env, ctx, events, at = new Date() }) {
+// Records the events of one request. Synchronous, never throws.
+export function recordUsage({ request, env, events }) {
   try {
-    const lines = events.filter(Boolean);
-    if (!lines.length || !env || String(env.USAGE || "").toLowerCase() === "off") return;
-    const cc = typeof request.cf?.country === "string" ? request.cf.country.slice(0, 2) : undefined;
-    const shared = { ua: userAgent(request), country: cc };
-    const jobs = [];
-    if (typeof env.LOGS?.put === "function") {
-      const body = lines.map((ev) => JSON.stringify({ ...ev, ...shared })).join("\n") + "\n";
-      jobs.push(() => env.LOGS.put(logKey(at), body, { httpMetadata: { contentType: "application/x-ndjson" } }));
+    if (!events.length || typeof env?.USAGE_AE?.writeDataPoint !== "function") return;
+    if (String(env.USAGE || "").toLowerCase() === "off") return;
+    const shared = {
+      ua: userAgent(request),
+      country: typeof request.cf?.country === "string" ? request.cf.country.slice(0, 2) : "",
+    };
+    for (const ev of events.slice(0, 100)) {
+      const row = { ...ev, ...shared };
+      try {
+        env.USAGE_AE.writeDataPoint({
+          indexes: [row.service || row.method],
+          blobs: BLOBS.map((k) => String(row[k] ?? "")),
+          doubles: [row.ms || 0, row.ok ? 1 : 0],
+        });
+      } catch {
+        // ignore: usage must never break an answer
+      }
     }
-    if (typeof env.COUNT?.count === "function") {
-      for (const f of lines.flatMap(counterFeatures)) jobs.push(() => env.COUNT.count("mcp", f, cc || "XX"));
-    }
-    const all = Promise.allSettled(jobs.map((job) => Promise.resolve().then(job)));
-    ctx?.waitUntil?.(all);
   } catch {
-    // ignore: logging must never break an answer
+    // ignore
   }
+}
+
+// What the shared counter gets for one logged line.
+export function counterFeatures(line) {
+  const out = [];
+  if (line.method === "initialize") out.push("session", `client_${clientKind(line.client)}`);
+  if (line.method === "tools/call") {
+    out.push(line.service && line.service !== "unknown" && /^[a-z0-9_]{1,43}$/.test(line.tool || "") ? `tool_${line.tool}` : "tool_unknown");
+  }
+  if (line.ok === false) out.push("error");
+  return out;
 }
