@@ -1,9 +1,12 @@
 import { createGateway } from "./gateway.js";
 import { UPSTREAMS } from "./upstreams.js";
+import { runExport } from "./export.js";
 
 // One gateway per isolate, so the tool-list cache is shared across requests.
 const gateway = createGateway(UPSTREAMS);
 
 export default {
-  fetch: (request) => gateway.handle(request),
+  fetch: (request, env, ctx) => gateway.handle(request, env, ctx),
+  // Daily usage export to R2 and the Allo usage counter (src/export.js).
+  scheduled: (_event, env, ctx) => ctx.waitUntil(runExport(env)),
 };
