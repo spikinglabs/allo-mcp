@@ -20,6 +20,9 @@ jobs:
         with:
           node-version: 22
       - run: npm test
+      - name: EU log bucket (once; fine if it exists)
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: npx --yes wrangler@4 r2 bucket create allo-mcp-logs --jurisdiction eu || true
       - name: Deploy
         if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         run: npx --yes wrangler@4 deploy

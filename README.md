@@ -33,7 +33,7 @@ Nothing is written to storage on a call. Instead:
   (`src/usage.js`, dataset `allo_mcp_usage`). `writeDataPoint` returns at once and errors are
   ignored, so it never blocks, slows or breaks a call. Notifications and pings are skipped.
 - **Once a day** at 01:20 UTC (`src/export.js`, cron), yesterday becomes one file in the private
-  R2 bucket `allo-mcp-logs`, `logs/<YYYY-MM-DD>.ndjson`, and its totals go to the shared Allo usage
+  R2 bucket `allo-mcp-logs` (EU jurisdiction: stored in the EU), `logs/<YYYY-MM-DD>.ndjson`, and its totals go to the shared Allo usage
   counter (https://monitoring.admin.allo.land/, "Allo Land connector (MCP gateway)"): `session`,
   `client_<assistant>`, `tool_<prefix>_<name>`, `error`, per country. Days missed in the last
   week are caught up; a day already in R2 is never exported twice.

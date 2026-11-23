@@ -19,6 +19,7 @@ dataset = "allo_mcp_usage"
 [[r2_buckets]]
 binding = "LOGS"
 bucket_name = "allo-mcp-logs"
+jurisdiction = "eu" # data stays in the EU (created by deploy.yml)
 
 [[services]]
 binding = "COUNT"
