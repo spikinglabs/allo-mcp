@@ -5,5 +5,5 @@ import { UPSTREAMS } from "./upstreams.js";
 const gateway = createGateway(UPSTREAMS);
 
 export default {
-  fetch: (request) => gateway.handle(request),
+  fetch: (request, env, ctx) => gateway.handle(request, env, ctx),
 };

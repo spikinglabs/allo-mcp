@@ -25,6 +25,25 @@ Example: `outings_search` calls `search` on Allo Outings.
 - Upstream JSON-RPC errors are passed through as they are; a server that can't
   be reached gives a tool result with `isError: true`.
 
+## Usage counts and logs
+
+`src/usage.js`, written in the background (`ctx.waitUntil`) after each answer, so it never
+blocks or slows a call, and any failure is ignored.
+
+- **Counts** on the shared Allo usage counter (https://monitoring.admin.allo.land/, site
+  "Allo Land connector (MCP gateway)"), per day and country: `session`, `client_<assistant>`
+  (`claude`, `chatgpt`, `cursor`, …, `other`), `tool_<prefix>_<name>`, `error`.
+  Service binding `COUNT` to the `allo-count` Worker (spikinglabs/alloland-rebirth, `workers/count`).
+- **Raw log** in the private R2 bucket `allo-mcp-logs` (binding `LOGS`):
+  `logs/<day>/<HHMMSSmmm>-<random>.ndjson`, one line per JSON-RPC request with `t`, `method`,
+  `tool`, `service`, `client`, `proto`, `ua` (first product token), `country`, `ms`, `ok`, `err`.
+  No IP address, no IDs or cookies, no tool arguments, nothing from the answers.
+  Notifications and pings are not logged.
+
+Free-tier budget: one R2 write per logged POST against 1 million writes a month for the whole
+Cloudflare account (shared with the Allo Cars MCP log) and 10 GB of storage. Set
+`USAGE = "off"` in `wrangler.toml` to stop counts and logs.
+
 ## Add a server
 
 Add one entry to `src/upstreams.js` (`prefix`, `title`, `url`, `site`) and deploy.

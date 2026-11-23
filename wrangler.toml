@@ -9,3 +9,17 @@ routes = [
 
 [observability]
 enabled = true
+
+# Usage (src/usage.js): daily counts on the shared Allo usage counter and a raw
+# log in R2, both written in the background after the answer.
+[[services]]
+binding = "COUNT"
+service = "allo-count"
+entrypoint = "Counter"
+
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "allo-mcp-logs"
+
+[vars]
+USAGE = "on" # "off" stops counts and logs
