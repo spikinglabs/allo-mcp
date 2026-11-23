@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.spikinglabs/allo-mcp",
+  "title": "Allo Land",
+  "description": "Free open data for families and drivers in Germany: kids' outings, car data, recalls, EV grant.",
+  "websiteUrl": "https://allo.land/",
+  "repository": {
+    "url": "https://github.com/spikinglabs/allo-mcp",
+    "source": "github"
+  },
+  "version": "1.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.allo.land/mcp"
+    }
+  ]
+}

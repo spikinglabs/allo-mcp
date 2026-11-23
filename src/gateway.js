@@ -7,6 +7,7 @@ const LATEST = PROTOCOL_VERSIONS[0];
 const SEP = "_";
 const CACHE_MS = 5 * 60 * 1000;
 const UPSTREAM_TIMEOUT_MS = 20_000;
+const API_MAX_CHARS = 90_000; // GPT Actions reject answers over ~100k characters
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -178,14 +179,112 @@ export function createGateway(upstreams, { fetchImpl = fetch, now = Date.now } =
     }
   }
 
+  // Plain HTTP API over the same tools, for clients that speak OpenAPI instead
+  // of MCP (ChatGPT GPT Actions and similar). POST /api/<tool> with the tool's
+  // arguments as the JSON body; GET /openapi.json describes every tool.
+  async function openapi(origin) {
+    const tools = await allTools();
+    const paths = {};
+    for (const t of tools) {
+      const readOnly = t.annotations?.readOnlyHint === true;
+      paths[`/api/${t.name}`] = {
+        post: {
+          operationId: t.name,
+          summary: clip(t.annotations?.title || t.title || t.name, 120),
+          description: clip(t.description || "", 300),
+          "x-openai-isConsequential": !readOnly,
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: openapiSchema(t.inputSchema) } },
+          },
+          responses: {
+            200: {
+              description: "The tool's answer. `result` holds its data; `error` is set when the tool could not answer.",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/ToolAnswer" } } },
+            },
+          },
+        },
+      };
+    }
+    return {
+      openapi: "3.1.0",
+      info: {
+        title: "Allo Land",
+        version: SERVER_INFO.version,
+        description:
+          "Open data for families and drivers in Germany from Allo Cars (cars.allo.land) and Allo Outings (outings.allo.land). " +
+          "Free, no sign-in. The same tools as the MCP server at " + origin + "/mcp.",
+      },
+      servers: [{ url: origin }],
+      paths,
+      components: {
+        schemas: {
+          ToolAnswer: {
+            type: "object",
+            properties: {
+              result: { description: "The tool's data (JSON when the tool returns JSON, otherwise text)." },
+              error: { type: "string" },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  async function callApi(name, args) {
+    const r = route(name);
+    if (!r) return json({ error: `Unknown tool: ${name}` }, 404);
+    try {
+      const result = await rpc(r.upstream, "tools/call", { name: r.tool, arguments: args });
+      const text = (result?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+      if (result?.isError) return json({ error: text || "The tool could not answer." });
+      let data = result?.structuredContent;
+      if (data === undefined) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
+      }
+      let body = JSON.stringify({ result: data });
+      if (body.length > API_MAX_CHARS) {
+        body = JSON.stringify({ result: clip(text || JSON.stringify(data), API_MAX_CHARS - 200), truncated: true });
+      }
+      return new Response(body, {
+        headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    } catch (e) {
+      if (e.rpc) return json({ error: e.rpc.message || "Bad request" }, 400);
+      return json({ error: `${r.upstream.title} could not be reached: ${e.message}. Try again in a moment.` }, 502);
+    }
+  }
+
   async function handle(request) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+
+    if (url.pathname === "/openapi.json" && request.method === "GET") return json(await openapi(url.origin));
+    if (url.pathname === "/privacy" && request.method === "GET") return privacyPage(upstreams);
+    if (url.pathname.startsWith("/api/")) {
+      if (request.method !== "POST") return new Response(null, { status: 405, headers: { ...CORS, allow: "POST, OPTIONS" } });
+      let args = {};
+      const raw = await request.text();
+      if (raw.trim()) {
+        try {
+          args = JSON.parse(raw);
+        } catch {
+          return json({ error: "Body must be JSON" }, 400);
+        }
+      }
+      if (!args || typeof args !== "object" || Array.isArray(args)) return json({ error: "Body must be a JSON object" }, 400);
+      return callApi(decodeURIComponent(url.pathname.slice(5)), args);
+    }
 
     if (url.pathname === "/" && request.method === "GET") {
       return json({
         name: SERVER_INFO.title,
         mcp: `${url.origin}/mcp`,
+        openapi: `${url.origin}/openapi.json`,
         services: upstreams.map((u) => ({ prefix: u.prefix, title: u.title, site: u.site })),
       });
     }
@@ -247,4 +346,36 @@ function json(data, status = 200) {
     status,
     headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
+}
+
+function clip(text, max) {
+  const s = String(text);
+  return s.length <= max ? s : s.slice(0, max - 1) + "…";
+}
+
+// MCP input schemas are JSON Schema; OpenAPI 3.1 takes them as they are, but
+// GPT Actions want an object schema with properties.
+function openapiSchema(schema) {
+  const s = schema && typeof schema === "object" ? { ...schema } : {};
+  delete s.$schema;
+  if (!s.type) s.type = "object";
+  if (!s.properties) s.properties = {};
+  return s;
+}
+
+// Short privacy note for the gateway itself, linked from app directories
+// (ChatGPT GPTs need one). Each service's own policy covers what it does.
+function privacyPage(upstreams) {
+  const links = upstreams.map((u) => `<li><a href="${u.site}">${u.title}</a></li>`).join("");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Allo Land MCP: privacy</title><style>body{font:16px/1.55 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#211e1c;background:#fff8ee}a{color:#c4521f}</style></head><body>
+<h1>Allo Land MCP and API: privacy</h1>
+<p>mcp.allo.land is a free gateway, run by SpikingLabs, to the Allo services listed below. It needs no account and sets no cookies.</p>
+<ul><li>The gateway keeps no record of who asks what. It passes each request to the service that owns the tool and returns that service's answer.</li>
+<li>Our host, Cloudflare, keeps short-lived technical logs (time, path, errors) so we can keep the service running.</li>
+<li>Search questions and tool arguments go to the service that answers them. Suggestions, tips and problem reports for Allo Outings are sent only when you ask your assistant to send them, and a moderator reviews them before anything is published.</li></ul>
+<p>Each service's own privacy policy covers what it does with a request:</p><ul>${links}</ul>
+<p>Questions: see the imprint on <a href="https://allo.land/">allo.land</a>.</p>
+</body></html>`;
+  return new Response(html, { headers: { ...CORS, "content-type": "text/html; charset=utf-8" } });
 }
