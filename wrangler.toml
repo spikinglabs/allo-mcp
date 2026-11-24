@@ -9,3 +9,26 @@ routes = [
 
 [observability]
 enabled = true
+
+# Usage (src/usage.js, src/export.js): a data point per request in Analytics Engine,
+# exported once a day to R2 and the shared Allo usage counter.
+[[analytics_engine_datasets]]
+binding = "USAGE_AE"
+dataset = "allo_mcp_usage"
+
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "allo-mcp-logs"
+jurisdiction = "eu" # data stays in the EU (created by deploy.yml)
+
+[[services]]
+binding = "COUNT"
+service = "allo-count"
+entrypoint = "Counter"
+
+[triggers]
+crons = ["20 1 * * *"] # 01:20 UTC: export yesterday
+
+[vars]
+USAGE = "on" # "off" stops recording and exporting
+# Secrets (set by .github/workflows/deploy.yml): ACCOUNT_ID, AE_API_TOKEN

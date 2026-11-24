@@ -25,6 +25,32 @@ Example: `outings_search` calls `search` on Allo Outings.
 - Upstream JSON-RPC errors are passed through as they are; a server that can't
   be reached gives a tool result with `isError: true`.
 
+## Usage counts and logs
+
+Nothing is written to storage on a call. Instead:
+
+- **During the day**, each request becomes one data point in Workers Analytics Engine
+  (`src/usage.js`, dataset `allo_mcp_usage`). `writeDataPoint` returns at once and errors are
+  ignored, so it never blocks, slows or breaks a call. Notifications and pings are skipped.
+- **Once a day** at 01:20 UTC (`src/export.js`, cron), yesterday becomes one file in the private
+  R2 bucket `allo-mcp-logs` (EU jurisdiction: stored in the EU), `logs/<YYYY-MM-DD>.ndjson`, and its totals go to the shared Allo usage
+  counter (https://monitoring.admin.allo.land/, "Allo Land connector (MCP gateway)"): `session`,
+  `client_<assistant>`, `tool_<prefix>_<name>`, `error`, per country. Days missed in the last
+  week are caught up; a day already in R2 is never exported twice.
+
+A log line has `t`, `method`, `tool`, `service`, `client`, `clientVersion`, `proto`, `ua` (first
+User-Agent token), `country`, `ms`, `ok`, `err`, and `sample` when Analytics Engine sampled.
+Never an IP address, ID, cookie, tool arguments or anything from the answers.
+
+Free-tier budget: Analytics Engine 100,000 data points a day (past that, points are dropped,
+not billed) and 10,000 read queries a day (the export uses 24); R2 one write a day; the counter
+one call a day. Analytics Engine keeps points for 3 months, so the R2 files are the long-term copy.
+
+Setup: the GitHub secret `CLOUDFLARE_ANALYTICS_TOKEN` (an API token with Account → Account
+Analytics → Read on the SpikingLabs account). The deploy workflow stores it, with the account ID,
+as the Worker secrets `AE_API_TOKEN` and `ACCOUNT_ID`. Set `USAGE = "off"` in `wrangler.toml` to
+stop recording and exporting.
+
 ## Add a server
 
 Add one entry to `src/upstreams.js` (`prefix`, `title`, `url`, `site`) and deploy.

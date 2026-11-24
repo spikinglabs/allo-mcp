@@ -2,6 +2,8 @@
 // that lists the tools of every Allo MCP server under a prefix and passes each
 // call through to the server that owns the tool.
 
+import { usageEvent, recordUsage } from "./usage.js";
+
 export const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const LATEST = PROTOCOL_VERSIONS[0];
 const SEP = "_";
@@ -259,7 +261,7 @@ export function createGateway(upstreams, { fetchImpl = fetch, now = Date.now } =
     }
   }
 
-  async function handle(request) {
+  async function handle(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
@@ -277,9 +279,20 @@ export function createGateway(upstreams, { fetchImpl = fetch, now = Date.now } =
         }
       }
       if (!args || typeof args !== "object" || Array.isArray(args)) return json({ error: "Body must be a JSON object" }, 400);
-      return callApi(decodeURIComponent(url.pathname.slice(5)), args);
+      const name = decodeURIComponent(url.pathname.slice(5));
+      const start = now();
+      const res = await callApi(name, args);
+      // Counted like an MCP tools/call, with client "openapi" (no arguments, no answer).
+      const ev = usageEvent({
+        msg: { method: "tools/call", params: { name } },
+        answer: res.ok ? {} : { error: { code: res.status } },
+        ms: now() - start,
+        route,
+      });
+      ev.client = "openapi";
+      recordUsage({ request, env, events: [ev] });
+      return res;
     }
-
     if (url.pathname === "/" && request.method === "GET") {
       return json({
         name: SERVER_INFO.title,
@@ -302,12 +315,22 @@ export function createGateway(upstreams, { fetchImpl = fetch, now = Date.now } =
     } catch {
       return json(errorReply(null, -32700, "Parse error"), 400);
     }
-    if (Array.isArray(body)) {
-      const out = (await Promise.all(body.map(handleOne))).filter(Boolean);
-      return out.length ? json(out) : new Response(null, { status: 202, headers: CORS });
-    }
-    const out = await handleOne(body);
-    return out ? json(out) : new Response(null, { status: 202, headers: CORS });
+    const msgs = Array.isArray(body) ? body : [body];
+    const events = [];
+    const answers = await Promise.all(
+      msgs.map(async (msg) => {
+        const start = now();
+        const answer = await handleOne(msg);
+        // Notifications and pings are not worth a log write.
+        if (answer && msg?.method !== "ping") events.push(usageEvent({ msg, answer, ms: now() - start, route }));
+        return answer;
+      })
+    );
+    // Fire-and-forget data points; stored and exported once a day (src/usage.js, src/export.js).
+    recordUsage({ request, env, events });
+    const out = answers.filter(Boolean);
+    if (!out.length) return new Response(null, { status: 202, headers: CORS });
+    return json(Array.isArray(body) ? out : out[0]);
   }
 
   return { handle, route };
