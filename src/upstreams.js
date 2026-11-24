@@ -13,5 +13,14 @@ export const UPSTREAMS = [
     title: "Allo Outings",
     url: "https://outings.allo.land/mcp",
     site: "https://outings.allo.land/",
+    // Titles for tools the server sends without one (app directories show them).
+    titles: {
+      search: "Find family outings",
+      fetch: "Details of an outing",
+      suggest_event: "Suggest a family event",
+      suggest_place: "Suggest a kid-friendly place",
+      add_tip: "Add a tip to an outing",
+      report_problem: "Report a problem with a listing",
+    },
   },
 ];

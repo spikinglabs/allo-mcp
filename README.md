@@ -91,7 +91,15 @@ spec instead of MCP (ChatGPT GPT Actions, for example):
 - `POST /api/<tool>` with the tool's arguments as a JSON object. Answers
   `{"result": ...}` (the tool's JSON, or its text), or `{"error": "..."}`.
   Answers over 90k characters are cut and carry `"truncated": true`.
-- `GET /privacy`: a short privacy note for app directories.
+- `GET /privacy` and `GET /terms`: privacy note and terms of use for app
+  directories. Keep the privacy note in step with `src/usage.js`.
+- `GET /.well-known/openai-apps-challenge`: the ChatGPT plugin directory's
+  domain token, from the `OPENAI_APPS_CHALLENGE` var in `wrangler.toml` (404
+  until it is set).
+
+Every tool in `tools/list` carries explicit `readOnlyHint`, `destructiveHint`
+and `openWorldHint`, and a title; the gateway fills in only what a server
+leaves out (`annotate` in `src/gateway.js`, titles in `src/upstreams.js`).
 
 ## MCP Registry
 

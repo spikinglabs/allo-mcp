@@ -125,3 +125,22 @@ test("privacy page is served", async () => {
   assert.equal(res.status, 200);
   assert.match(await res.text(), /Allo Outings/);
 });
+
+test("annotations are filled in and titles added", async () => {
+  const { annotate } = await import("../src/gateway.js");
+  assert.deepEqual(annotate({ name: "search", annotations: { readOnlyHint: true } }, { titles: { search: "Find" } }), {
+    readOnlyHint: true, destructiveHint: false, openWorldHint: false, title: "Find",
+  });
+  assert.deepEqual(annotate({ name: "x" }, {}), { readOnlyHint: false, destructiveHint: true, openWorldHint: false });
+  assert.equal(annotate({ name: "s", annotations: { readOnlyHint: false, destructiveHint: false } }, {}).destructiveHint, false);
+});
+
+test("terms page and domain challenge", async () => {
+  const gw = createGateway(UP, { fetchImpl: fakeFetch() });
+  assert.equal((await gw.handle(new Request("https://mcp.allo.land/terms"))).status, 200);
+  const path = "https://mcp.allo.land/.well-known/openai-apps-challenge";
+  assert.equal((await gw.handle(new Request(path), {})).status, 404);
+  const res = await gw.handle(new Request(path), { OPENAI_APPS_CHALLENGE: "tok123" });
+  assert.equal(await res.text(), "tok123");
+  assert.match(res.headers.get("content-type"), /text\/plain/);
+});

@@ -103,6 +103,7 @@ export function createGateway(upstreams, { fetchImpl = fetch, now = Date.now } =
           name: `${u.prefix}${SEP}${t.name}`,
           title: t.title ? `${u.title}: ${t.title}` : undefined,
           description: `[${u.title}] ${t.description || ""}`.trim(),
+          annotations: annotate(t, u),
         });
       }
     });
@@ -267,6 +268,14 @@ export function createGateway(upstreams, { fetchImpl = fetch, now = Date.now } =
 
     if (url.pathname === "/openapi.json" && request.method === "GET") return json(await openapi(url.origin));
     if (url.pathname === "/privacy" && request.method === "GET") return privacyPage(upstreams);
+    if (url.pathname === "/terms" && request.method === "GET") return termsPage(upstreams);
+    if (url.pathname === "/.well-known/openai-apps-challenge" && request.method === "GET") {
+      // Domain check for the ChatGPT plugin directory: the token goes in wrangler.toml [vars].
+      const token = String(env?.OPENAI_APPS_CHALLENGE || "").trim();
+      return token
+        ? new Response(token, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } })
+        : json({ error: "Not found" }, 404);
+    }
     if (url.pathname.startsWith("/api/")) {
       if (request.method !== "POST") return new Response(null, { status: 405, headers: { ...CORS, allow: "POST, OPTIONS" } });
       let args = {};
@@ -386,19 +395,63 @@ function openapiSchema(schema) {
   return s;
 }
 
-// Short privacy note for the gateway itself, linked from app directories
-// (ChatGPT GPTs need one). Each service's own policy covers what it does.
+// Every tool carries explicit readOnlyHint, destructiveHint and openWorldHint (app
+// directories require all three) and a title. A server's own values win; the gateway
+// fills only what is missing: read-only tools are not destructive, and the Allo
+// servers answer from their own catalogue, so openWorldHint defaults to false.
+export function annotate(tool, upstream) {
+  const a = { ...(tool.annotations || {}) };
+  const readOnly = a.readOnlyHint === true;
+  if (typeof a.readOnlyHint !== "boolean") a.readOnlyHint = false;
+  if (typeof a.destructiveHint !== "boolean") a.destructiveHint = readOnly ? false : true;
+  if (typeof a.openWorldHint !== "boolean") a.openWorldHint = false;
+  if (!a.title) a.title = upstream.titles?.[tool.name] || tool.title || undefined;
+  if (!a.title) delete a.title;
+  return a;
+}
+
+const PAGE_STYLE =
+  "body{font:16px/1.55 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#211e1c;background:#fff8ee}a{color:#c4521f}h2{font-size:1.1rem;margin-top:1.6rem}";
+const page = (title, body) =>
+  new Response(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>${body}</body></html>`,
+    { headers: { ...CORS, "content-type": "text/html; charset=utf-8" } }
+  );
+
+// Privacy note for the gateway itself, linked from app directories. Keep it in step
+// with src/usage.js: it must name every field a usage data point holds.
 function privacyPage(upstreams) {
   const links = upstreams.map((u) => `<li><a href="${u.site}">${u.title}</a></li>`).join("");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Allo Land MCP: privacy</title><style>body{font:16px/1.55 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#211e1c;background:#fff8ee}a{color:#c4521f}</style></head><body>
-<h1>Allo Land MCP and API: privacy</h1>
+  return page(
+    "Allo Land MCP: privacy",
+    `<h1>Allo Land MCP and API: privacy</h1>
 <p>mcp.allo.land is a free gateway, run by SpikingLabs, to the Allo services listed below. It needs no account and sets no cookies.</p>
-<ul><li>The gateway keeps no record of who asks what. It passes each request to the service that owns the tool and returns that service's answer.</li>
-<li>Our host, Cloudflare, keeps short-lived technical logs (time, path, errors) so we can keep the service running.</li>
-<li>Search questions and tool arguments go to the service that answers them. Suggestions, tips and problem reports for Allo Outings are sent only when you ask your assistant to send them, and a moderator reviews them before anything is published.</li></ul>
-<p>Each service's own privacy policy covers what it does with a request:</p><ul>${links}</ul>
-<p>Questions: see the imprint on <a href="https://allo.land/">allo.land</a>.</p>
-</body></html>`;
-  return new Response(html, { headers: { ...CORS, "content-type": "text/html; charset=utf-8" } });
+<h2>What we receive and why</h2>
+<p>Your assistant sends us the tool it wants to use and that tool's arguments, for example a town and a date. We pass them to the Allo service that owns the tool and return its answer. We do not store the arguments or the answers.</p>
+<h2>What we keep</h2>
+<p>For each request we keep one usage record, so we can see which tools are used and fix errors: the method and tool name, which service answered, the assistant's name and version, the protocol version, the first word of the user agent, the country (from our host, not from you), the error text if any, the time taken, and whether it worked. We never keep IP addresses, account or device IDs, cookies, tool arguments or answers.</p>
+<p>Usage records are held in Cloudflare Analytics Engine for up to 3 months and copied once a day into a private storage bucket in the EU. Daily totals go to our own usage counter. Our host, Cloudflare, also keeps short-lived technical logs to run the service.</p>
+<h2>Who else receives data</h2>
+<ul><li>The Allo service that answers a request receives its arguments. Each service's own policy covers what it does with them:<ul>${links}</ul></li>
+<li>Cloudflare hosts the gateway and its storage.</li>
+<li>Suggestions, tips and problem reports for Allo Outings are sent only when you ask your assistant to send them. A moderator reviews them before anything is published.</li></ul>
+<p>We do not sell data or use it for advertising.</p>
+<h2>Your choices</h2>
+<p>You can stop using the gateway at any time by removing it from your assistant. Because usage records hold nothing that identifies you, we cannot find or delete one person's records. For questions, use the contact details in the imprint on <a href="https://allo.land/">allo.land</a> or open an issue on <a href="https://github.com/spikinglabs/allo-mcp/issues">GitHub</a>.</p>`
+  );
+}
+
+function termsPage(upstreams) {
+  const links = upstreams.map((u) => `<a href="${u.site}">${u.title}</a>`).join(", ");
+  return page(
+    "Allo Land MCP: terms",
+    `<h1>Allo Land MCP and API: terms of use</h1>
+<p>mcp.allo.land is a free service run by SpikingLabs that gives AI assistants access to open data from ${links}. No account is needed.</p>
+<ul><li>The data comes from public and official sources and from organisers' listings. Times, prices and ratings can change and can be wrong. Check the linked source page before you rely on it.</li>
+<li>Nothing here is legal, financial, medical or safety advice. Recalls for one specific car depend on its VIN; ask the manufacturer.</li>
+<li>Use it fairly: no automated bulk downloading and no attempts to overload or break the service. We may limit or block traffic that harms it.</li>
+<li>Suggestions you send are reviewed by a moderator, who may edit or decline them. Send only what you have the right to share, and no personal data about others.</li>
+<li>The service is provided as it is, without guarantees, and may change or stop at any time. As far as the law allows, we are not liable for decisions made on its answers.</li></ul>
+<p>Questions: see the imprint on <a href="https://allo.land/">allo.land</a>. Privacy: <a href="/privacy">mcp.allo.land/privacy</a>.</p>`
+  );
 }
