@@ -1,0 +1,21 @@
+name: Publish to MCP Registry
+# Lists mcp.allo.land in the official MCP Registry (registry.modelcontextprotocol.io)
+# under io.github.spikinglabs/allo-mcp, using server.json. Run it by hand from
+# the Actions tab after changing server.json (bump its version first).
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write # GitHub OIDC login to the registry, no secrets needed
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+      - name: Log in with GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+      - name: Publish
+        run: ./mcp-publisher publish

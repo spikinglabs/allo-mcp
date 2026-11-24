@@ -89,3 +89,39 @@ test("notifications get 202, batches work, GET is 405", async () => {
   assert.equal(b.length, 1);
   assert.equal((await gw.handle(new Request("https://mcp.allo.land/mcp"))).status, 405);
 });
+
+test("openapi.json lists every tool as POST /api/<tool>", async () => {
+  const gw = createGateway(UP, { fetchImpl: fakeFetch() });
+  const r = await (await gw.handle(new Request("https://mcp.allo.land/openapi.json"))).json();
+  assert.equal(r.openapi, "3.1.0");
+  assert.equal(r.servers[0].url, "https://mcp.allo.land");
+  assert.deepEqual(Object.keys(r.paths), ["/api/cars_search", "/api/outings_search"]);
+  const op = r.paths["/api/cars_search"].post;
+  assert.equal(op.operationId, "cars_search");
+  assert.equal(op["x-openai-isConsequential"], true); // no readOnlyHint in the fake
+  assert.equal(op.requestBody.content["application/json"].schema.type, "object");
+});
+
+test("POST /api/<tool> calls the tool and returns its answer", async () => {
+  const calls = [];
+  const gw = createGateway(UP, { fetchImpl: fakeFetch({ calls }) });
+  const res = await gw.handle(
+    new Request("https://mcp.allo.land/api/outings_fetch", { method: "POST", body: JSON.stringify({ id: "x" }) }),
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { result: 'outings:fetch:{"id":"x"}' });
+  assert.equal(calls.at(-1).host, "outings");
+  let bad = await gw.handle(new Request("https://mcp.allo.land/api/nope_x", { method: "POST", body: "{}" }));
+  assert.equal(bad.status, 404);
+  bad = await gw.handle(new Request("https://mcp.allo.land/api/cars_search", { method: "POST", body: "[1]" }));
+  assert.equal(bad.status, 400);
+  bad = await gw.handle(new Request("https://mcp.allo.land/api/cars_boom", { method: "POST", body: "{}" }));
+  assert.equal(bad.status, 400); // upstream JSON-RPC error
+});
+
+test("privacy page is served", async () => {
+  const gw = createGateway(UP, { fetchImpl: fakeFetch() });
+  const res = await gw.handle(new Request("https://mcp.allo.land/privacy"));
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Allo Outings/);
+});

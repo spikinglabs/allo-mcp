@@ -79,6 +79,27 @@ secrets (Settings → Secrets and variables → Actions):
 
 Until both exist, the workflow passes without deploying.
 
+## Plain HTTP API (for ChatGPT GPTs and other OpenAPI clients)
+
+The same tools are also served as plain HTTP, for clients that take an OpenAPI
+spec instead of MCP (ChatGPT GPT Actions, for example):
+
+- `GET /openapi.json`: OpenAPI 3.1, generated from the live tool list. One
+  operation per tool, `POST /api/<tool>`; tools that write (the Outings
+  suggestions) are marked `x-openai-isConsequential: true`, so ChatGPT asks
+  the user before sending.
+- `POST /api/<tool>` with the tool's arguments as a JSON object. Answers
+  `{"result": ...}` (the tool's JSON, or its text), or `{"error": "..."}`.
+  Answers over 90k characters are cut and carry `"truncated": true`.
+- `GET /privacy`: a short privacy note for app directories.
+
+## MCP Registry
+
+`server.json` describes the server for the official MCP Registry as
+`io.github.spikinglabs/allo-mcp`. Run the "Publish to MCP Registry" workflow
+by hand (Actions tab) to list it or to publish a new version; bump `version`
+in `server.json` first. It logs in with GitHub OIDC, so no secret is needed.
+
 ## Use it
 
 Add `https://mcp.allo.land/mcp` as a custom connector (Claude: Settings →
